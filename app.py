@@ -2,7 +2,7 @@ import os
 import time
 import requests
 from datetime import datetime
-from datetime import timezone
+from datetime import timezone, timedelta
 import pytz
 from dotenv import load_dotenv
 
@@ -25,7 +25,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
 }
 
-# USER PREFS — SAME AS YOUR WORKING CODE
+
 BOOKING_PREFERENCES = {
     "centers": [948],                                # add more if needed
     "preferred_timings": [                           # 8:00 PM and 9:00 AM
@@ -34,6 +34,16 @@ BOOKING_PREFERENCES = {
     ],
     "sport_id": 351                                  # Pickleball
 }
+
+# BOOKING_PREFERENCES = {
+#     "centers": [1106, 1107],
+#     "preferred_timings": [
+#         {"hour": 8, "minute": 0},
+#         {"hour": 9, "minute": 0}
+#     ],
+#     "sport_id": 350,  # Badminton
+#     "enabled": True
+# }
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -60,7 +70,7 @@ def get_center_schedule(center_id: int):
     url = f"https://www.cult.fit/api/v2/fitso/web/schedule?centerId={center_id}"
     r = requests.get(url, headers=HEADERS, timeout=8)
     print(f"[DEBUG] Schedule API Status: {r.status_code}")
-    print(f"[DEBUG] Response: {r.text[:500]}")
+    #print(f"[DEBUG] Response: {r.text}")
     return r.json()
 
 
@@ -90,30 +100,29 @@ def matches_preferred_timing(time_str: str):
     return False
 
 
-def find_available_slots(schedule_data, sport_id):
-    available = []
-
+def find_and_book_preferred_slot(schedule_data, sport_id: int, target_date_str: str, center_id: int):
+    """Iterate through preferred timings and try to book the first one found."""
     for date_group in schedule_data.get("classByDateList", []):
-        for time_group in date_group.get("classByTimeList", []):
-            for slot in time_group.get("classes", []):
-                if (
-                    slot.get("workoutId") == sport_id and
-                    slot.get("availableSeats", 0) > 0 and
-                    matches_preferred_timing(time_group.get("id", ""))
-                ):
-                    print(f"[INFO] Slot found {time_group.get('id')} - Seats={slot.get('availableSeats')}")
+        # Only check for slots on the target date
+        if date_group.get("id") != target_date_str:
+            continue
 
-                    available.append({
-                        "class_id": slot.get("id"),
-                        "date": date_group.get("id"),
-                        "time": time_group.get("id"),
-                        "start_utc": slot.get("startDateTimeUTC"),
-                        "seats": slot.get("availableSeats")
-                    })
+        # Iterate through preferences to enforce order
+        for pref_timing in BOOKING_PREFERENCES["preferred_timings"]:
+            for time_group in date_group.get("classByTimeList", []):
+                current_hour, current_minute = map(int, time_group.get("id", "99:99").split(':')[:2])
 
-    print(f"[INFO] Preferred slots found: {len(available)}")
+                # Check if this time_group matches the current preference
+                if current_hour == pref_timing["hour"] and current_minute == pref_timing["minute"]:
+                    for slot in time_group.get("classes", []):
+                        if slot.get("workoutId") == sport_id and slot.get("availableSeats", 0) > 0 and slot.get("state") == "AVAILABLE":
+                            print(f"[INFO] Preferred slot found {time_group.get('id')} - Seats={slot.get('availableSeats')}")
+                            # Attempt to book this slot immediately
+                            return book_slot_from_details(center_id, slot, date_group, time_group)
 
-    return available
+    print("[INFO] No preferred slots found after checking all preferences.")
+    return False
+
 
 
 # ------------------------------------------------------
@@ -145,6 +154,36 @@ def book(center_id, slot_id, workout_id, ts):
     return False
 
 
+def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict, time_group: dict) -> bool:
+    """Helper function to encapsulate booking logic for a found slot."""
+    notify(
+        f"🏸 Slot Found!\nCenter: {center_id}\nDate: {date_group.get('id')}\n"
+        f"Time: {time_group.get('id')}\nSeats: {slot_details.get('availableSeats')}"
+    )
+
+    ts = convert_utc_to_timestamp(slot_details.get("startDateTimeUTC"))
+    if not ts:
+        err_msg = f"⚠️ Could not convert slot time to timestamp for Center {center_id}."
+        print(err_msg)
+        notify(err_msg)
+        return False
+
+    ok = book(center_id, slot_details.get("id"), BOOKING_PREFERENCES["sport_id"], ts)
+
+    if ok:
+        msg = (
+            "🎉 BOOKING SUCCESSFUL!\n\n"
+            f"Center: {center_id}\n"
+            f"Time: {time_group.get('id')}\n"
+            f"Date: {date_group.get('id')}\n"
+            f"Class ID: {slot_details.get('id')}"
+        )
+        notify(msg)
+        print(msg)
+        return True
+    else:
+        notify(f"❌ Booking failed for center {center_id} at time {time_group.get('id')}")
+        return False
 # ------------------------------------------------------
 # MAIN LOGIC
 # ------------------------------------------------------
@@ -155,11 +194,15 @@ if __name__ == "__main__":
     # ---- WAIT UNTIL EXACTLY 22:00 IST ----
     while True:
         now = datetime.now(IST)
-        print("[DEBUG] Current IST:", now.strftime("%H:%M:%S"))
-        # Wait until exactly 10 PM IST to start booking
-        if now.hour >= 11 and now.minute >= 20:
+        # Wait until exactly 10 PM IST (22:00) to start booking. For testing, you can change the hour.
+        if now.hour >= 10:
             break
-        time.sleep(0.5)
+        # Sleep for 10 seconds to reduce CPU usage while waiting
+        print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for 22:00 IST...")
+        time.sleep(10)
+
+    # Calculate the target date which is 4 days from now.
+    target_date = datetime.now(IST) + timedelta(days=3)
 
     notify("🚀 Booking started at 10:00 PM IST!")
 
@@ -169,45 +212,16 @@ if __name__ == "__main__":
 
         try:
             schedule_data = get_center_schedule(center)
-            available = find_available_slots(schedule_data, BOOKING_PREFERENCES["sport_id"])
-
-            if not available:
-                print("[WARN] No preferred slots in this center.")
-                continue
-
-            slot = available[0]  # pick first available slot
-
-            notify(
-                f"🏸 Slot Found!\nCenter: {center}\nDate: {slot['date']}\n"
-                f"Time: {slot['time']}\nSeats: {slot['seats']}"
-            )
-
-            ts = convert_utc_to_timestamp(slot["start_utc"])
-            if not ts:
-                err_msg = f"⚠️ Could not convert slot time to timestamp for Center {center}."
-                print(err_msg)
-                notify(err_msg)
-                continue
-            ok = book(center, slot["class_id"], BOOKING_PREFERENCES["sport_id"], ts)
-
-            if ok:
-                msg = (
-                    "🎉 BOOKING SUCCESSFUL!\n\n"
-                    f"Center: {center}\n"
-                    f"Time: {slot['time']}\n"
-                    f"Date: {slot['date']}\n"
-                    f"Class ID: {slot['class_id']}"
-                )
-                notify(msg)
-                print(msg)
+            
+            # The new function will try to book and will return True on success
+            booking_succeeded = find_and_book_preferred_slot(schedule_data, BOOKING_PREFERENCES["sport_id"], target_date.strftime("%Y-%m-%d"), center)
+            
+            if booking_succeeded:
                 exit(0)
-            else:
-                notify(f"❌ Booking failed for center {center}")
-
         except Exception as e:
             notify(f"⚠️ Error for center {center}: {str(e)}")
             print("Exception:", e)
             continue
 
-    notify("⚠️ No matching slots found or booking failed.")
-    print("⚠️ No matching slots found.")
+    notify("⚠️ Script finished. No preferred slots were successfully booked.")
+    print("⚠️ Script finished. No preferred slots were successfully booked.")
