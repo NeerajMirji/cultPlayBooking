@@ -1,146 +1,106 @@
-🎯 Cult Play Auto-Booking Bot
+<div align="center">
 
-Automated Cult badminton slot booking bot with a Telegram interface, scheduler, and Render deployment support.
+  <h1>🏸 Cult.fit Auto-Booking Bot 🏸</h1>
 
-This bot keeps checking for available slots and instantly books them based on your preferences — with live Telegram alerts.
+  <p>
+    <strong>A simple, powerful Python script to automatically book your favorite Cult.fit Play sessions.</strong>
+  </p>
 
-⭐ Features
+  <p>
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python">
+    <img alt="GitHub Actions" src="https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=github-actions&logoColor=white">
+  </p>
+</div>
 
-✓ Automatically checks for available slots
-✓ Auto-booking when matching slot is found
-✓ Telegram alerts for availability & status updates
-✓ Scheduler you can start/stop anytime
-✓ Commands to change preferences (coming soon)
-✓ Deployable on Render free tier
-✓ Fully environment-variable driven
+This bot runs automatically on a schedule using GitHub Actions, waits for the booking window to open (e.g., 10 PM IST), and instantly books a slot based on your ordered preferences. It even sends you status updates on Telegram!
 
-📁 Project Structure
-project/
-│── app.py                  # Flask app + Telegram webhook
-│── telegram_bot.py         # Telegram command handlers
-│── scheduler.py            # APScheduler logic
-│── cult_client.py          # Cult API calls (login, search, book)
-│── booking.py              # Booking logic wrapper
-│── utils.py                # Helpers & logging
-│── requirements.txt
-│── .env
-│── README.md
+---
 
-🔧 Setup Instructions (Local)
-1️⃣ Clone the repo
-git clone https://github.com/yourusername/cult-auto-booking.git
-cd cult-auto-booking
+## ⭐ Features
 
-2️⃣ Create .env file
+- **🎯 Priority-Based Booking**: Books slots according to your preferred time order (e.g., tries for 8 PM before 9 AM).
+- **🗓️ Future Date Targeting**: Specifically targets bookings for a set number of days in the future (e.g., 4 days from today).
+- **🤖 Fully Automated**: Runs on a schedule using GitHub Actions. Set it and forget it!
+- **📢 Telegram Notifications**: Get real-time alerts when the script starts, finds a slot, and confirms a booking.
+- **⚙️ Easy Configuration**: All preferences and secrets are managed in one place.
+- **🔁 Multi-Center Support**: Automatically cycles through your list of preferred centers.
 
-Create a file named .env in the root:
+## 🚀 Getting Started
 
-# Telegram Config
-TELEGRAM_BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+Follow these steps to get your personal booking bot up and running.
 
-# Cult login details
-CULT_USERNAME=your_phone_or_email
-CULT_PASSWORD=your_password
+### 1. Fork the Repository
 
-# Scheduler interval
-SCHEDULER_INTERVAL_MINUTES=3
+First, **fork this repository** to your own GitHub account. This allows GitHub Actions to run on your copy.
+p
+### 2. Configure Your Preferences
 
-# After deployment set:
-WEBHOOK_URL=https://your-render-url.onrender.com/webhook
+Open `app.py` and edit the `BOOKING_PREFERENCES` dictionary to match your needs.
 
-3️⃣ Install dependencies
-pip install -r requirements.txt
+```python
+BOOKING_PREFERENCES = {
+    "centers":,  # Your preferred center IDs
+    "preferred_timings": [     # List timings in order of preference
+        {"hour": 20, "minute": 0},  # 8:00 PM
+        {"hour": 9, "minute": 0}    # 9:00 AM
+    ],
+    "sport_id": 350            # 350 for Badminton, 351 for Pickleball
+}
+```
 
-4️⃣ Run the server
-python app.py
+### 3. Add Your Secrets
 
+The script needs your Cult.fit API keys and Telegram details to work. Add these as **repository secrets** in your forked repo.
 
-The server runs at:
+Go to `Settings` > `Secrets and variables` > `Actions` and add the following:
 
-http://127.0.0.1:5000/
+| Secret Name          | Description                                    |
+| -------------------- | ---------------------------------------------- |
+| `CULT_API_KEY`       | Your Cult.fit API key.                         |
+| `CULT_ST_COOKIE`     | The `st` authentication cookie.                |
+| `CULT_AT_COOKIE`     | The `at` authentication cookie.                |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot's token.                     |
+| `TELEGRAM_CHAT_ID`   | The chat ID to which notifications are sent.   |
 
-5️⃣ Test locally
-Health endpoint
-http://127.0.0.1:5000/
+> **💡 How to get Cult.fit credentials?**
+> 1. Log in to `cult.fit` in a desktop web browser.
+> 2. Open Developer Tools (`F12` or `Cmd+Opt+I`).
+> 3. Go to the **Network** tab.
+> 4. Refresh the page or click on a schedule. Find any request to the Cult API (e.g., a `schedule` request).
+> 5. In the **Headers** tab of that request, find and copy the `apiKey`.
+> 6. In the same request headers, scroll down to `Cookie` and copy the values for the `st` and `at` cookies.
 
-Trigger booking check manually
-http://127.0.0.1:5000/run_now
+### 4. Enable GitHub Actions
 
-Start scheduler
-http://127.0.0.1:5000/start_scheduler
+Go to the **Actions** tab in your forked repository. If you see a prompt to enable workflows, click "I understand my workflows, go ahead and enable them."
 
-Stop scheduler
-http://127.0.0.1:5000/stop_scheduler
+## ⚙️ How It Works
 
-🤖 Telegram Bot Setup
-1️⃣ Start the bot
+The workflow is defined in `.github/workflows/cult_booking.yml`.
 
-Open Telegram → search for your bot → click Start.
+1.  **Scheduled Trigger**: A `cron` job triggers the workflow at a set time (e.g., daily at 9:55 PM IST).
+2.  **Manual Trigger**: You can also run it manually anytime using the `workflow_dispatch` button in the Actions tab.
+3.  **Execution**:
+    - The script starts and waits until exactly 10:00 PM IST.
+    - It calculates the target booking date (e.g., 4 days from now).
+    - It iterates through your preferred centers.
+    - For each center, it fetches the schedule and looks for an available slot that matches your sport and time preferences, respecting the order you defined.
+    - If a match is found, it attempts to book it immediately.
+    - On success, it sends a confirmation to your Telegram and exits.
+    - If no slots are found, it notifies you and finishes.
 
-2️⃣ Send /start
+### Changing the Schedule
 
-You will see the list of commands.
+To change when the script runs, edit the `cron` expression in `.github/workflows/cult_booking.yml`. The time is in **UTC**.
 
-3️⃣ Commands available
-/start – help menu
-/status – current state of scheduler + preferences
-/start_scheduler – begin auto-checking
-/stop_scheduler – stop auto-checking
-/preferences – view monitoring preferences
-/enable_booking – enable auto booking
-/disable_booking – disable auto booking
-/run_now – manually run booking check
+```yaml
+on:
+  schedule:
+    # Runs at 16:25 UTC, which is 9:55 PM IST.
+    - cron: '25 16 * * *'
+```
 
-🌐 Deploying on Render
-1️⃣ Push your repository to GitHub
+---
 
-Make sure it contains:
+Happy booking! 🎉
 
-app.py
-
-requirements.txt
-
-other Python files
-
-2️⃣ Create Render Web Service
-
-Visit: https://render.com
-
-New → Web Service
-
-Connect your GitHub repo
-
-Configure:
-
-Setting	Value
-Runtime	Python 3.10+
-Build Command	pip install -r requirements.txt
-Start Command	gunicorn app:app
-3️⃣ Add environment variables
-
-Render → Your Service → Environment
-
-Paste the same values from your .env.
-
-4️⃣ Deploy
-
-Render will give you a URL like:
-
-https://cultplaybooking.onrender.com
-
-🤖 Set Telegram Webhook (Required)
-
-Replace <TOKEN> and use your Render URL:
-
-https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://your-app.onrender.com/webhook
-
-
-Example:
-
-https://api.telegram.org/bot12345:ABC/setWebhook?url=https://cultplaybooking.onrender.com/webhook
-
-
-Success response:
-
-{"ok":true,"result":true,"description":"Webhook was set"}

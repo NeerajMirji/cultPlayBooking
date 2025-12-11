@@ -26,24 +26,24 @@ HEADERS = {
 }
 
 
-BOOKING_PREFERENCES = {
-    "centers": [948],                                # add more if needed
-    "preferred_timings": [                           # 8:00 PM and 9:00 AM
-        {"hour": 20, "minute": 00, "second": 0},
-        {"hour": 9, "minute": 0, "second": 0}
-    ],
-    "sport_id": 351                                  # Pickleball
-}
-
 # BOOKING_PREFERENCES = {
-#     "centers": [1106, 1107],
-#     "preferred_timings": [
-#         {"hour": 8, "minute": 0},
-#         {"hour": 9, "minute": 0}
+#     "centers": [948],                                # add more if needed
+#     "preferred_timings": [                           # 8:00 PM and 9:00 AM
+#         {"hour": 20, "minute": 00, "second": 0},
+#         {"hour": 9, "minute": 0, "second": 0}
 #     ],
-#     "sport_id": 350,  # Badminton
-#     "enabled": True
+#     "sport_id": 351                                  # Pickleball
 # }
+
+BOOKING_PREFERENCES = {
+    "centers": [1106, 1107],
+    "preferred_timings": [
+        {"hour": 8, "minute": 0},
+        {"hour": 9, "minute": 0}
+    ],
+    "sport_id": 350,  # Badminton
+    "enabled": True
+}
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     while True:
         now = datetime.now(IST)
         # Wait until exactly 10 PM IST (22:00) to start booking. For testing, you can change the hour.
-        if now.hour >= 10:
+        if now.hour >= 22:
             break
         # Sleep for 10 seconds to reduce CPU usage while waiting
         print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for 22:00 IST...")
