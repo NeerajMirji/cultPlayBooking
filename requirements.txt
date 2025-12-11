@@ -1,6 +1,3 @@
-Flask
 requests
-schedule
 pytz
-gunicorn
-APScheduler
+python-dotenv
