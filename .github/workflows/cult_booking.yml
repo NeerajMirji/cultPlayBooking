@@ -4,7 +4,7 @@ on:
   workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   schedule:
     # Runs at 5:17 AM UTC, which is 10:47 AM IST (for testing).
-    - cron: '17 5 * * *'
+    - cron: '18 5 * * *'
 
 jobs:
   book-class:
