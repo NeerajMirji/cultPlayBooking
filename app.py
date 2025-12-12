@@ -202,7 +202,7 @@ if __name__ == "__main__":
         time.sleep(10)
 
     # Calculate the target date which is 4 days from now.
-    target_date = datetime.now(IST) + timedelta(days=3)
+    target_date = datetime.now(IST) + timedelta(days=4)
 
     notify("🚀 Booking started at 10:00 PM IST!")
 
