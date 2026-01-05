@@ -189,22 +189,45 @@ def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict,
 # ------------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Cult Booking Script Triggered")
-    notify("⏰ GitHub Action Triggered. Waiting until exactly 10:00 PM IST...")
 
-    # ---- WAIT UNTIL EXACTLY 22:00 IST ----
+    TARGET_HOUR = 21  # 9 PM
+    TARGET_MINUTE = 0
+    TARGET_SECOND = 0
+    
+    # Notify with the correct target time
+    notify(f"⏰ Script triggered. Waiting until exactly {TARGET_HOUR:02d}:{TARGET_MINUTE:02d} IST...")
+
+    # ---- PRECISE WAIT LOGIC ----
     while True:
         now = datetime.now(IST)
-        # Wait until exactly 10 PM IST (22:00) to start booking. For testing, you can change the hour.
-        if now.hour >= 22:
+        
+        # Check if we are at or past the target time
+        if (now.hour > TARGET_HOUR) or \
+           (now.hour == TARGET_HOUR and now.minute > TARGET_MINUTE) or \
+           (now.hour == TARGET_HOUR and now.minute == TARGET_MINUTE and now.second >= TARGET_SECOND):
             break
-        # Sleep for 10 seconds to reduce CPU usage while waiting
-        print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for 22:00 IST...")
-        time.sleep(10)
+
+        # Calculate remaining time to be more intelligent about sleeping
+        time_to_target = (
+            datetime(now.year, now.month, now.day, TARGET_HOUR, TARGET_MINUTE, TARGET_SECOND, tzinfo=IST) - now
+        ).total_seconds()
+
+        sleep_duration = 1 # Default sleep
+        if time_to_target > 60:
+            sleep_duration = 10  # Sleep longer if we are far away
+        elif time_to_target <= 1 and time_to_target > 0:
+            sleep_duration = 0.001 # Sleep for 1ms if very close
+        elif time_to_target <= 0:
+             break # Go time
+        
+        print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S.%f')}. Waiting for {TARGET_HOUR:02d}:{TARGET_MINUTE:02d}. Sleeping for {sleep_duration}s")
+        time.sleep(sleep_duration)
 
     # Calculate the target date which is 4 days from now.
     target_date = datetime.now(IST) + timedelta(days=4)
 
-    notify("🚀 Booking started at 10:00 PM IST!")
+    # Use the precise start time in the notification
+    notify(f"🚀 Booking started at {datetime.now(IST).strftime('%H:%M:%S.%f')} IST!")
 
     # ---- BOOKING FLOW ----
     for center in BOOKING_PREFERENCES["centers"]:
