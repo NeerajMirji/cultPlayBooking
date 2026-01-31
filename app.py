@@ -1,11 +1,12 @@
 import os
 import time
 import requests
-from datetime import datetime
-from datetime import timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
 from dotenv import load_dotenv
 from github import Github
+import threading
+import queue
 
 # ------------------------------------------------------
 # LOAD ENV VARIABLES
@@ -28,27 +29,56 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
 }
 
-
-# BOOKING_PREFERENCES = {
-#     "centers": [946],                                # add more if needed
-#     "preferred_timings": [                           # 8:00 PM and 9:00 AM
-#         {"hour": 21, "minute": 00, "second": 0},
-#         {"hour": 9, "minute": 0, "second": 0}
-#     ],
-#     "sport_id": 351                                  # Pickleball
-# }
+# --- V2 BOOKING PREFERENCES ---
+SLOT_ID_MAP = {
+    1106: {  # Fitso Silpa Park Badminton
+        "8:00": "4",
+        "7:00": "3"
+    },
+    1107: { # Placeholder, needs verification
+        "8:00": "4", 
+        "7:00": "3" 
+    }
+}
 
 BOOKING_PREFERENCES = {
     "centers": [1106, 1107],
     "preferred_timings": [
         {"hour": 8, "minute": 0},
-        {"hour": 9, "minute": 0}
+        {"hour": 7, "minute": 0}
     ],
     "sport_id": 350,  # Badminton
     "enabled": True
 }
 
 IST = pytz.timezone("Asia/Kolkata")
+notification_queue = queue.Queue()
+
+# ------------------------------------------------------
+# NOTIFICATION WORKER THREAD
+# ------------------------------------------------------
+def notification_worker():
+    """Processes notification messages from a queue in the background."""
+    while True:
+        message = notification_queue.get()
+        if message is None:
+            break
+
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            print("[WARN] Telegram not configured. Skipping notification.")
+            continue
+        
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=5)
+        except Exception as e:
+            print(f"[ERROR] Notification failed: {e}")
+        finally:
+            notification_queue.task_done()
+
+def notify(msg: str):
+    """Adds a message to the notification queue to be sent in the background."""
+    notification_queue.put(msg)
 
 # ------------------------------------------------------
 # GITHUB SECRET UPDATE
@@ -74,87 +104,9 @@ def update_github_secret(secret_name: str, secret_value: str):
         notify(msg)
 
 # ------------------------------------------------------
-# TELEGRAM NOTIFICATION
-# ------------------------------------------------------
-def notify(msg: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram not configured.")
-        return
-
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=5)
-    except:
-        pass
-
-
-# ------------------------------------------------------
-# FETCH CENTER SCHEDULE
-# ------------------------------------------------------
-def get_center_schedule(center_id: int):
-    print(f"[INFO] Fetching schedule for center {center_id} ...")
-    url = f"https://www.cult.fit/api/v2/fitso/web/schedule?centerId={center_id}"
-    r = requests.get(url, headers=HEADERS, timeout=8)
-    print(f"[DEBUG] Schedule API Status: {r.status_code}")
-    #print(f"[DEBUG] Response: {r.text}")
-    return r.json()
-
-
-# ------------------------------------------------------
-# UTILS
-# ------------------------------------------------------
-def convert_utc_to_timestamp(utc_string):
-    try:
-        dt_str = utc_string.replace(' GMT', '')
-        dt = datetime.strptime(dt_str, '%a, %d %b %Y %H:%M:%S')
-        timestamp_seconds = int(dt.replace(tzinfo=timezone.utc).timestamp())
-        return timestamp_seconds * 1000
-    except Exception as e:
-        print(f"Error converting timestamp: {e}")
-        return None
-
-
-def matches_preferred_timing(time_str: str):
-    try:
-        hour, minute = map(int, time_str.split(':')[:2])
-    except:
-        return False
-
-    for pref in BOOKING_PREFERENCES["preferred_timings"]:
-        if hour == pref["hour"] and minute == pref["minute"]:
-            return True
-    return False
-
-
-def find_and_book_preferred_slot(schedule_data, sport_id: int, target_date_str: str, center_id: int):
-    """Iterate through preferred timings and try to book the first one found."""
-    for date_group in schedule_data.get("classByDateList", []):
-        # Only check for slots on the target date
-        if date_group.get("id") != target_date_str:
-            continue
-
-        # Iterate through preferences to enforce order
-        for pref_timing in BOOKING_PREFERENCES["preferred_timings"]:
-            for time_group in date_group.get("classByTimeList", []):
-                current_hour, current_minute = map(int, time_group.get("id", "99:99").split(':')[:2])
-
-                # Check if this time_group matches the current preference
-                if current_hour == pref_timing["hour"] and current_minute == pref_timing["minute"]:
-                    for slot in time_group.get("classes", []):
-                        if slot.get("workoutId") == sport_id and slot.get("availableSeats", 0) > 0 and slot.get("state") == "AVAILABLE":
-                            print(f"[INFO] Preferred slot found {time_group.get('id')} - Seats={slot.get('availableSeats')}")
-                            # Attempt to book this slot immediately
-                            return book_slot_from_details(center_id, slot, date_group, time_group)
-
-    print("[INFO] No preferred slots found after checking all preferences.")
-    return False
-
-
-
-# ------------------------------------------------------
 # BOOKING
 # ------------------------------------------------------
-def book(center_id, slot_id, workout_id, ts):
+def book(center_id, slot_id, workout_id, ts, time_str):
     payload = {
         "centerId": center_id,
         "slotId": str(slot_id),
@@ -172,43 +124,19 @@ def book(center_id, slot_id, workout_id, ts):
     try:
         title = r.json().get("header", {}).get("title", "")
     except:
-        return False, None, None
+        title = ""
 
     if r.status_code == 200 and ("Booked" in title or "confirmed" in title.lower()):
-        # Booking was successful, check for new cookies in the response
         new_st = r.cookies.get('st')
         new_at = r.cookies.get('at')
-        return True, new_st, new_at
 
-    return False, None, None
-
-
-def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict, time_group: dict) -> bool:
-    """Helper function to encapsulate booking logic for a found slot."""
-    notify(
-        f"🏸 Slot Found!\nCenter: {center_id}\nDate: {date_group.get('id')}\n"
-        f"Time: {time_group.get('id')}\nSeats: {slot_details.get('availableSeats')}"
-    )
-
-    ts = convert_utc_to_timestamp(slot_details.get("startDateTimeUTC"))
-    if not ts:
-        err_msg = f"⚠️ Could not convert slot time to timestamp for Center {center_id}."
-        print(err_msg)
-        notify(err_msg)
-        return False
-
-    ok, new_st, new_at = book(center_id, slot_details.get("id"), BOOKING_PREFERENCES["sport_id"], ts)
-
-    if ok:
         msg = (
             "🎉 BOOKING SUCCESSFUL!\n\n"
             f"Center: {center_id}\n"
-            f"Time: {time_group.get('id')}\n"
-            f"Date: {date_group.get('id')}\n"
-            f"Class ID: {slot_details.get('id')}"
+            f"Time: {time_str}\n"
+            f"Slot ID: {slot_id}"
         )
         
-        # If new cookies were returned, update them in GitHub Secrets
         if new_st and new_at:
             notify("❗ New cookies found! Attempting to update GitHub Secrets...")
             update_github_secret("CULT_ST_COOKIE", new_st)
@@ -218,71 +146,86 @@ def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict,
         print(msg)
         return True
     else:
-        notify(f"❌ Booking failed for center {center_id} at time {time_group.get('id')}")
+        notify(f"❌ Booking failed for center {center_id} at time {time_str}. Response: {r.text}")
         return False
+
 # ------------------------------------------------------
 # MAIN LOGIC
 # ------------------------------------------------------
 if __name__ == "__main__":
-    print("🚀 Cult Booking Script Triggered")
+    # Start the background notification worker thread
+    notification_thread = threading.Thread(target=notification_worker, daemon=True)
+    notification_thread.start()
 
-    TARGET_HOUR = 21  # 9 PM
+    print("🚀 Cult Booking Script Triggered")
+    notify("🚀 Cult Booking Script Triggered")
+
+    TARGET_HOUR = 21
     TARGET_MINUTE = 0
     TARGET_SECOND = 0
     
     now = datetime.now(IST)
-    # Define the target time for today using the current date
     target_time = now.replace(hour=TARGET_HOUR, minute=TARGET_MINUTE, second=TARGET_SECOND, microsecond=0)
 
-    # Only wait if the target time is in the future
     if datetime.now(IST) < target_time:
         notify(f"⏰ Script triggered. Waiting until exactly {target_time.strftime('%H:%M:%S')} IST...")
         
-        # ---- PRECISE WAIT LOGIC ----
         while True:
             now = datetime.now(IST)
             if now >= target_time:
-                break # Exit loop when target time is reached
+                break
 
             time_to_target = (target_time - now).total_seconds()
 
-            # Sleep for longer intervals when far from the target
             if time_to_target > 60:
                 sleep_duration = 10
-            # Sleep for 1s intervals when closer
             elif time_to_target > 1:
                 sleep_duration = 1
-            # For the final second, don't sleep at all.
-            # Just loop continuously to catch the exact moment.
             else:
                 continue
             
             print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for {target_time.strftime('%H:%M:%S')}. Sleeping for {sleep_duration}s")
             time.sleep(sleep_duration)
 
-    # --- BOOKING LOGIC STARTS HERE ---
-    # Calculate the target date which is 4 days from now.
-    target_date = datetime.now(IST) + timedelta(days=4)
+    # --- V2 BOOKING LOGIC ---
 
-    # Use the precise start time in the notification
+    target_booking_date = datetime.now(IST) + timedelta(days=4)
+    
     notify(f"🚀 Booking started at {datetime.now(IST).strftime('%H:%M:%S.%f')} IST!")
 
-    # ---- BOOKING FLOW ----
-    for center in BOOKING_PREFERENCES["centers"]:
-        print(f"\n========== Checking center {center} ==========")
+    for pref_timing in BOOKING_PREFERENCES["preferred_timings"]:
+        for center in BOOKING_PREFERENCES["centers"]:
+            
+            time_key = f"{pref_timing['hour']}:00"
 
-        try:
-            schedule_data = get_center_schedule(center)
+            slot_id = SLOT_ID_MAP.get(center, {}).get(time_key)
+
+            if not slot_id:
+                print(f"[WARN] No slot_id mapping for Center {center} at {time_key}. Skipping.")
+                continue
+
+            print(f"\n[INFO] Attempting direct booking for Center {center} at {time_key}")
+
+            booking_dt_ist = target_booking_date.replace(
+                hour=pref_timing['hour'], 
+                minute=pref_timing['minute'], 
+                second=0, 
+                microsecond=0
+            )
             
-            # The new function will try to book and will return True on success
-            booking_succeeded = find_and_book_preferred_slot(schedule_data, BOOKING_PREFERENCES["sport_id"], target_date.strftime("%Y-%m-%d"), center)
-            
+            booking_timestamp_ms = int(booking_dt_ist.astimezone(timezone.utc).timestamp() * 1000)
+
+            booking_succeeded = book(
+                center_id=center,
+                slot_id=slot_id,
+                workout_id=BOOKING_PREFERENCES["sport_id"],
+                ts=booking_timestamp_ms,
+                time_str=time_key
+            )
+
             if booking_succeeded:
+                notify("✅ Main thread finished after successful booking.")
                 exit(0)
-        except Exception as e:
-            notify(f"⚠️ Error for center {center}: {str(e)}")
-            print("Exception:", e)
-            continue
 
     notify("⚠️ Script finished. No preferred slots were successfully booked.")
     print("⚠️ Script finished. No preferred slots were successfully booked.")

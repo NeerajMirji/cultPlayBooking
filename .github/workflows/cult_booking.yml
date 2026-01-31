@@ -2,6 +2,8 @@ name: Cult.fit Class Booker
 
 on:
   workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+  schedule:
+    - cron: '30 12 * * *' # Runs at 12:30 UTC, which is 6:00 PM IST
 
 jobs:
   book-class:
@@ -28,4 +30,6 @@ jobs:
           CULT_API_KEY: ${{ secrets.CULT_API_KEY }}
           CULT_ST_COOKIE: ${{ secrets.CULT_ST_COOKIE }}
           CULT_AT_COOKIE: ${{ secrets.CULT_AT_COOKIE }}
+          SECRET_ACCESS_TOKEN: ${{ secrets.SECRET_ACCESS_TOKEN }}
+          REPOSITORY_NAME: ${{ github.repository }}
         run: python app.py
