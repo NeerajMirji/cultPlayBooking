@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timezone, timedelta
 import pytz
 from dotenv import load_dotenv
+from github import Github
 
 # ------------------------------------------------------
 # LOAD ENV VARIABLES
@@ -16,6 +17,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 API_KEY = os.environ.get("CULT_API_KEY", "")
 ST_COOKIE = os.environ.get("CULT_ST_COOKIE", "")
 AT_COOKIE = os.environ.get("CULT_AT_COOKIE", "")
+GITHUB_TOKEN = os.environ.get("SECRET_ACCESS_TOKEN")
+GITHUB_REPOSITORY = os.environ.get("REPOSITORY_NAME")
 
 COOKIES = {"st": ST_COOKIE, "at": AT_COOKIE}
 HEADERS = {
@@ -27,9 +30,9 @@ HEADERS = {
 
 
 # BOOKING_PREFERENCES = {
-#     "centers": [948],                                # add more if needed
+#     "centers": [946],                                # add more if needed
 #     "preferred_timings": [                           # 8:00 PM and 9:00 AM
-#         {"hour": 20, "minute": 00, "second": 0},
+#         {"hour": 21, "minute": 00, "second": 0},
 #         {"hour": 9, "minute": 0, "second": 0}
 #     ],
 #     "sport_id": 351                                  # Pickleball
@@ -46,6 +49,29 @@ BOOKING_PREFERENCES = {
 }
 
 IST = pytz.timezone("Asia/Kolkata")
+
+# ------------------------------------------------------
+# GITHUB SECRET UPDATE
+# ------------------------------------------------------
+def update_github_secret(secret_name: str, secret_value: str):
+    """Update a secret in the GitHub repository."""
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        msg = "🔒 GitHub token or repository not configured. Cannot update secrets."
+        print(msg)
+        notify(msg)
+        return
+
+    try:
+        g = Github(GITHUB_TOKEN)
+        repo = g.get_repo(GITHUB_REPOSITORY)
+        repo.create_secret(secret_name, secret_value)
+        msg = f"🔐 Successfully updated GitHub secret: {secret_name}"
+        print(msg)
+        notify(msg)
+    except Exception as e:
+        msg = f"❌ Failed to update GitHub secret: {secret_name}. Error: {e}"
+        print(msg)
+        notify(msg)
 
 # ------------------------------------------------------
 # TELEGRAM NOTIFICATION
@@ -146,12 +172,15 @@ def book(center_id, slot_id, workout_id, ts):
     try:
         title = r.json().get("header", {}).get("title", "")
     except:
-        return False
+        return False, None, None
 
     if r.status_code == 200 and ("Booked" in title or "confirmed" in title.lower()):
-        return True
+        # Booking was successful, check for new cookies in the response
+        new_st = r.cookies.get('st')
+        new_at = r.cookies.get('at')
+        return True, new_st, new_at
 
-    return False
+    return False, None, None
 
 
 def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict, time_group: dict) -> bool:
@@ -168,7 +197,7 @@ def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict,
         notify(err_msg)
         return False
 
-    ok = book(center_id, slot_details.get("id"), BOOKING_PREFERENCES["sport_id"], ts)
+    ok, new_st, new_at = book(center_id, slot_details.get("id"), BOOKING_PREFERENCES["sport_id"], ts)
 
     if ok:
         msg = (
@@ -178,6 +207,13 @@ def book_slot_from_details(center_id: int, slot_details: dict, date_group: dict,
             f"Date: {date_group.get('id')}\n"
             f"Class ID: {slot_details.get('id')}"
         )
+        
+        # If new cookies were returned, update them in GitHub Secrets
+        if new_st and new_at:
+            notify("❗ New cookies found! Attempting to update GitHub Secrets...")
+            update_github_secret("CULT_ST_COOKIE", new_st)
+            update_github_secret("CULT_AT_COOKIE", new_at)
+        
         notify(msg)
         print(msg)
         return True
@@ -194,35 +230,37 @@ if __name__ == "__main__":
     TARGET_MINUTE = 0
     TARGET_SECOND = 0
     
-    # Notify with the correct target time
-    notify(f"⏰ Script triggered. Waiting until exactly {TARGET_HOUR:02d}:{TARGET_MINUTE:02d} IST...")
+    now = datetime.now(IST)
+    # Define the target time for today using the current date
+    target_time = now.replace(hour=TARGET_HOUR, minute=TARGET_MINUTE, second=TARGET_SECOND, microsecond=0)
 
-    # ---- PRECISE WAIT LOGIC ----
-    while True:
-        now = datetime.now(IST)
+    # Only wait if the target time is in the future
+    if datetime.now(IST) < target_time:
+        notify(f"⏰ Script triggered. Waiting until exactly {target_time.strftime('%H:%M:%S')} IST...")
         
-        # Check if we are at or past the target time
-        if (now.hour > TARGET_HOUR) or \
-           (now.hour == TARGET_HOUR and now.minute > TARGET_MINUTE) or \
-           (now.hour == TARGET_HOUR and now.minute == TARGET_MINUTE and now.second >= TARGET_SECOND):
-            break
+        # ---- PRECISE WAIT LOGIC ----
+        while True:
+            now = datetime.now(IST)
+            if now >= target_time:
+                break # Exit loop when target time is reached
 
-        # Calculate remaining time to be more intelligent about sleeping
-        time_to_target = (
-            datetime(now.year, now.month, now.day, TARGET_HOUR, TARGET_MINUTE, TARGET_SECOND, tzinfo=IST) - now
-        ).total_seconds()
+            time_to_target = (target_time - now).total_seconds()
 
-        sleep_duration = 1 # Default sleep
-        if time_to_target > 60:
-            sleep_duration = 10  # Sleep longer if we are far away
-        elif time_to_target <= 1 and time_to_target > 0:
-            sleep_duration = 0.001 # Sleep for 1ms if very close
-        elif time_to_target <= 0:
-             break # Go time
-        
-        print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S.%f')}. Waiting for {TARGET_HOUR:02d}:{TARGET_MINUTE:02d}. Sleeping for {sleep_duration}s")
-        time.sleep(sleep_duration)
+            # Sleep for longer intervals when far from the target
+            if time_to_target > 60:
+                sleep_duration = 10
+            # Sleep for 1s intervals when closer
+            elif time_to_target > 1:
+                sleep_duration = 1
+            # For the final second, don't sleep at all.
+            # Just loop continuously to catch the exact moment.
+            else:
+                continue
+            
+            print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for {target_time.strftime('%H:%M:%S')}. Sleeping for {sleep_duration}s")
+            time.sleep(sleep_duration)
 
+    # --- BOOKING LOGIC STARTS HERE ---
     # Calculate the target date which is 4 days from now.
     target_date = datetime.now(IST) + timedelta(days=4)
 
