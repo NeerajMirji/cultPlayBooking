@@ -31,7 +31,7 @@ HEADERS = {
 
 # --- V2 BOOKING PREFERENCES ---
 SLOT_ID_MAP = {
-    1106: {  # Fitso Silpa Park Badminton
+    946: {  # Fitso Silpa Park Badminton
         "8:00": "4",
         "7:00": "3"
     },
@@ -42,12 +42,12 @@ SLOT_ID_MAP = {
 }
 
 BOOKING_PREFERENCES = {
-    "centers": [1106, 1107],
+    "centers": [946, 1107],
     "preferred_timings": [
         {"hour": 8, "minute": 0},
         {"hour": 7, "minute": 0}
     ],
-    "sport_id": 350,  # Badminton
+    "sport_id": 351,  # Badminton
     "enabled": True
 }
 
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     print("🚀 Cult Booking Script Triggered")
     notify("🚀 Cult Booking Script Triggered")
 
-    TARGET_HOUR = 21
+    TARGET_HOUR = 16
     TARGET_MINUTE = 0
     TARGET_SECOND = 0
     
@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
     # --- V2 BOOKING LOGIC ---
 
-    target_booking_date = datetime.now(IST) + timedelta(days=4)
+    target_booking_date = datetime.now(IST) + timedelta(days=3)
     
     notify(f"🚀 Booking started at {datetime.now(IST).strftime('%H:%M:%S.%f')} IST!")
 
