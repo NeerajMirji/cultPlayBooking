@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import logging
 from datetime import datetime, timedelta, timezone
 import pytz
 from dotenv import load_dotenv
@@ -9,223 +10,161 @@ import threading
 import queue
 
 # ------------------------------------------------------
-# LOAD ENV VARIABLES
+# 1. SETUP & LOGGING CONFIGURATION
 # ------------------------------------------------------
 load_dotenv()
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        # Explicitly set encoding to utf-8 to handle emojis
+        logging.FileHandler("cult_booking.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+IST = pytz.timezone("Asia/Kolkata")
+notification_queue = queue.Queue()
+session = requests.Session()
+
+# Credentials
 API_KEY = os.environ.get("CULT_API_KEY", "")
 ST_COOKIE = os.environ.get("CULT_ST_COOKIE", "")
 AT_COOKIE = os.environ.get("CULT_AT_COOKIE", "")
 GITHUB_TOKEN = os.environ.get("SECRET_ACCESS_TOKEN")
 GITHUB_REPOSITORY = os.environ.get("REPOSITORY_NAME")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-COOKIES = {"st": ST_COOKIE, "at": AT_COOKIE}
+session.cookies.update({"st": ST_COOKIE, "at": AT_COOKIE})
+
 HEADERS = {
     "apiKey": API_KEY,
-    "Cookie": "; ".join([f"{k}={v}" for k, v in COOKIES.items()]),
     "Content-Type": "application/json",
     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
 }
 
-# --- V2 BOOKING PREFERENCES ---
-SLOT_ID_MAP = {
-    1106: {  # Fitso Silpa Park Badminton
-        "8:00": "4",
-        "7:00": "3"
-    },
-    1107: { # Placeholder, needs verification
-        "8:00": "4", 
-        "7:00": "3" 
-    }
-}
-
+# Config
+SLOT_ID_MAP = {1106: {"8:00": "4", "7:00": "3"}, 1107: {"8:00": "4", "7:00": "3"}}
 BOOKING_PREFERENCES = {
     "centers": [1106, 1107],
-    "preferred_timings": [
-        {"hour": 8, "minute": 0},
-        {"hour": 7, "minute": 0}
-    ],
-    "sport_id": 350,  # Badminton
-    "enabled": True
+    "preferred_timings": [{"hour": 8, "minute": 0}, {"hour": 7, "minute": 0}],
+    "sport_id": 350
 }
 
-IST = pytz.timezone("Asia/Kolkata")
-notification_queue = queue.Queue()
+# ------------------------------------------------------
+# 2. UTILITIES
+# ------------------------------------------------------
+def notify(msg: str):
+    """Logs the message locally and queues it for Telegram."""
+    logger.info(msg)
+    notification_queue.put(msg)
 
-# ------------------------------------------------------
-# NOTIFICATION WORKER THREAD
-# ------------------------------------------------------
 def notification_worker():
-    """Processes notification messages from a queue in the background."""
     while True:
         message = notification_queue.get()
-        if message is None:
-            break
-
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            print("[WARN] Telegram not configured. Skipping notification.")
-            continue
-        
+        if message is None: break
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: continue
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=5)
         except Exception as e:
-            print(f"[ERROR] Notification failed: {e}")
-        finally:
-            notification_queue.task_done()
+            logger.error(f"Telegram failed: {e}")
+        finally: notification_queue.task_done()
 
-def notify(msg: str):
-    """Adds a message to the notification queue to be sent in the background."""
-    notification_queue.put(msg)
-
-# ------------------------------------------------------
-# GITHUB SECRET UPDATE
-# ------------------------------------------------------
-def update_github_secret(secret_name: str, secret_value: str):
-    """Update a secret in the GitHub repository."""
-    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-        msg = "🔒 GitHub token or repository not configured. Cannot update secrets."
-        print(msg)
-        notify(msg)
-        return
-
+def update_github_secret(name, value):
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPOSITORY)
-        repo.create_secret(secret_name, secret_value)
-        msg = f"🔐 Successfully updated GitHub secret: {secret_name}"
-        print(msg)
-        notify(msg)
+        repo.create_secret(name, value)
+        notify(f"🔐 Secret Updated: {name}")
     except Exception as e:
-        msg = f"❌ Failed to update GitHub secret: {secret_name}. Error: {e}"
-        print(msg)
-        notify(msg)
+        logger.error(f"GitHub Secret Sync Error: {e}")
 
 # ------------------------------------------------------
-# BOOKING
+# 3. CORE ENGINE
 # ------------------------------------------------------
-def book(center_id, slot_id, workout_id, ts, time_str):
-    payload = {
-        "centerId": center_id,
-        "slotId": str(slot_id),
-        "workoutId": workout_id,
-        "bookingTimestamp": ts
-    }
+def check_session_health():
+    url = f"https://www.cult.fit/api/v2/fitso/web/sport?sportId={BOOKING_PREFERENCES['sport_id']}"
+    try:
+        r = session.get(url, headers=HEADERS, timeout=10)
+        if r.status_code == 200:
+            notify("✅ Session Health: ACTIVE")
+            return True
+        notify(f"🚨 Session Health: DEAD (Status {r.status_code})")
+    except Exception as e:
+        logger.error(f"Health Check Exception: {e}")
+    return False
 
-    print(f"[INFO] Attempting to book slot {slot_id} at center {center_id}")
+def book(center_id, slot_id, ts, time_str):
+    payload = {"centerId": center_id, "slotId": str(slot_id), "workoutId": BOOKING_PREFERENCES['sport_id'], "bookingTimestamp": ts}
     url = "https://www.cult.fit/api/v2/fitso/web/class/book"
-    r = requests.post(url, json=payload, headers=HEADERS, timeout=10)
-
-    print(f"[DEBUG] Booking Status: {r.status_code}")
-    print(f"[DEBUG] Booking Response: {r.text}")
-
+    
+    logger.info(f"Attempting Center {center_id} for {time_str}...")
+    r = session.post(url, json=payload, headers=HEADERS, timeout=10)
+    
     try:
         title = r.json().get("header", {}).get("title", "")
-    except:
-        title = ""
+    except: title = ""
 
     if r.status_code == 200 and ("Booked" in title or "confirmed" in title.lower()):
-        new_st = r.cookies.get('st')
-        new_at = r.cookies.get('at')
-
-        msg = (
-            "🎉 BOOKING SUCCESSFUL!\n\n"
-            f"Center: {center_id}\n"
-            f"Time: {time_str}\n"
-            f"Slot ID: {slot_id}"
-        )
-        
-        if new_st and new_at:
-            notify("❗ New cookies found! Attempting to update GitHub Secrets...")
+        new_st, new_at = session.cookies.get('st'), session.cookies.get('at')
+        if new_st != ST_COOKIE or new_at != AT_COOKIE:
             update_github_secret("CULT_ST_COOKIE", new_st)
             update_github_secret("CULT_AT_COOKIE", new_at)
-        
-        notify(msg)
-        print(msg)
+        notify(f"🎉 SUCCESS! Booked {center_id} @ {time_str}")
         return True
-    else:
-        notify(f"❌ Booking failed for center {center_id} at time {time_str}. Response: {r.text}")
-        return False
+    
+    logger.warning(f"Booking fail for {center_id}: {r.text}")
+    return False
 
 # ------------------------------------------------------
-# MAIN LOGIC
+# 4. EXECUTION
 # ------------------------------------------------------
 if __name__ == "__main__":
-    # Start the background notification worker thread
-    notification_thread = threading.Thread(target=notification_worker, daemon=True)
-    notification_thread.start()
+    threading.Thread(target=notification_worker, daemon=True).start()
+    logger.info("🚀 Script Online (Cron Start)")
+    notify("🚀 Cult Booking Script Online (Cron Triggered)")
 
-    print("🚀 Cult Booking Script Triggered")
-    notify("🚀 Cult Booking Script Triggered")
-
-    TARGET_HOUR = 21
-    TARGET_MINUTE = 0
-    TARGET_SECOND = 0
-    
+    TARGET_HOUR, TARGET_MIN = 21, 0
     now = datetime.now(IST)
-    target_time = now.replace(hour=TARGET_HOUR, minute=TARGET_MINUTE, second=TARGET_SECOND, microsecond=0)
+    target_time = now.replace(hour=TARGET_HOUR, minute=TARGET_MIN, second=0, microsecond=0)
 
-    if datetime.now(IST) < target_time:
-        notify(f"⏰ Script triggered. Waiting until exactly {target_time.strftime('%H:%M:%S')} IST...")
+    if now < target_time:
+        # Health check at 8:15 PM (45 mins before)
+        health_time = target_time - timedelta(minutes=45)
         
-        while True:
-            now = datetime.now(IST)
-            if now >= target_time:
-                break
+        if now < health_time:
+            logger.info(f"Waiting until 8:15 PM for Health Check...")
+            time.sleep((health_time - now).total_seconds())
+        
+        check_session_health()
 
-            time_to_target = (target_time - now).total_seconds()
+        # Wait for 9:00 PM
+        logger.info("Standing by for 9:00 PM booking window...")
+        while datetime.now(IST) < target_time:
+            remaining = (target_time - datetime.now(IST)).total_seconds()
+            if remaining > 1: time.sleep(0.5)
+            else: continue
 
-            if time_to_target > 60:
-                sleep_duration = 10
-            elif time_to_target > 1:
-                sleep_duration = 1
-            else:
-                continue
-            
-            print(f"[DEBUG] Current IST: {now.strftime('%H:%M:%S')}. Waiting for {target_time.strftime('%H:%M:%S')}. Sleeping for {sleep_duration}s")
-            time.sleep(sleep_duration)
+    # Booking Logic
+    target_date = datetime.now(IST) + timedelta(days=4)
+    notify(f"⚡ Booking Started at {datetime.now(IST).strftime('%H:%M:%S.%f')}")
 
-    # --- V2 BOOKING LOGIC ---
-
-    target_booking_date = datetime.now(IST) + timedelta(days=4)
-    
-    notify(f"🚀 Booking started at {datetime.now(IST).strftime('%H:%M:%S.%f')} IST!")
-
-    for pref_timing in BOOKING_PREFERENCES["preferred_timings"]:
+    for timing in BOOKING_PREFERENCES["preferred_timings"]:
         for center in BOOKING_PREFERENCES["centers"]:
-            
-            time_key = f"{pref_timing['hour']}:00"
-
+            time_key = f"{timing['hour']}:00"
             slot_id = SLOT_ID_MAP.get(center, {}).get(time_key)
+            if not slot_id: continue
 
-            if not slot_id:
-                print(f"[WARN] No slot_id mapping for Center {center} at {time_key}. Skipping.")
-                continue
+            dt = target_date.replace(hour=timing['hour'], minute=timing['minute'], second=0, microsecond=0)
+            ts = int(dt.astimezone(timezone.utc).timestamp() * 1000)
 
-            print(f"\n[INFO] Attempting direct booking for Center {center} at {time_key}")
-
-            booking_dt_ist = target_booking_date.replace(
-                hour=pref_timing['hour'], 
-                minute=pref_timing['minute'], 
-                second=0, 
-                microsecond=0
-            )
-            
-            booking_timestamp_ms = int(booking_dt_ist.astimezone(timezone.utc).timestamp() * 1000)
-
-            booking_succeeded = book(
-                center_id=center,
-                slot_id=slot_id,
-                workout_id=BOOKING_PREFERENCES["sport_id"],
-                ts=booking_timestamp_ms,
-                time_str=time_key
-            )
-
-            if booking_succeeded:
-                notify("✅ Main thread finished after successful booking.")
+            if book(center, slot_id, ts, time_key):
+                notify("✅ Booking Successful.")
                 exit(0)
 
-    notify("⚠️ Script finished. No preferred slots were successfully booked.")
-    print("⚠️ Script finished. No preferred slots were successfully booked.")
+    notify("⚠️ Window closed. No slots secured.")
