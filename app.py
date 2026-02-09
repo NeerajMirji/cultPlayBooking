@@ -165,6 +165,7 @@ if __name__ == "__main__":
 
             if book(center, slot_id, ts, time_key):
                 notify("✅ Booking Successful.")
+                time.sleep(10)  # Short delay to ensure logs are flushed
                 exit(0)
 
     notify("⚠️ Window closed. No slots secured.")
