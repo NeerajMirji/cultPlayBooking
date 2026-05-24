@@ -3,7 +3,7 @@ name: Cult.fit Class Booker
 on:
   workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
   schedule:
-    - cron: '00 13 * * *' # Runs at 13:00 UTC, which is 6:30 PM IST
+    - cron: '30 07 * * *' # Runs at 07:30 UTC, which is 1:00 PM IST
 
 jobs:
   book-class:
